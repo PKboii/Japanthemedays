@@ -91,6 +91,47 @@ export default function App() {
     let seasonIdx = -2;
     let frame = 0;
 
+    /* ---- timeline input: native scroll when the document can scroll,
+       otherwise drive the film directly from wheel / touch / keys ---- */
+    let virtual = 0;
+    let nativeUsable = true;
+    const runwayPx = () => window.innerHeight * 26;
+    const onWheel = (e: WheelEvent) => {
+      nativeUsable = document.documentElement.scrollHeight - window.innerHeight > 2;
+      if (!nativeUsable) virtual = clamp(virtual + e.deltaY / runwayPx(), 0, 1);
+    };
+    let lastTouchY: number | null = null;
+    const onTouchStart = (e: TouchEvent) => {
+      lastTouchY = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? null;
+      if (y === null || lastTouchY === null) return;
+      nativeUsable = document.documentElement.scrollHeight - window.innerHeight > 2;
+      if (!nativeUsable) virtual = clamp(virtual + (lastTouchY - y) / runwayPx(), 0, 1);
+      lastTouchY = y;
+    };
+    const onTouchEnd = () => {
+      lastTouchY = null;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (nativeUsable) return; // browser handles key scrolling natively
+      const steps: Record<string, number> = {
+        ArrowDown: 0.012, ArrowUp: -0.012, PageDown: 0.045, PageUp: -0.045,
+        " ": 0.02, Spacebar: 0.02, Home: -1, End: 1,
+      };
+      const d = steps[e.key];
+      if (d !== undefined) {
+        e.preventDefault();
+        virtual = clamp(virtual + d, 0, 1);
+      }
+    };
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("keydown", onKey);
+
     const resize = () => {
       v.w = window.innerWidth;
       v.h = window.innerHeight;
@@ -120,6 +161,7 @@ export default function App() {
     let raf = 0;
     let last = performance.now();
     let first = true;
+    let frameErrored = false;
 
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
@@ -128,11 +170,13 @@ export default function App() {
       v.dt = dt;
       v.time += dt;
       frame++;
+      try {
 
       /* ---- scroll → master timeline */
       const doc = document.documentElement;
-      const max = Math.max(1, doc.scrollHeight - window.innerHeight);
-      v.target = clamp(window.scrollY / max, 0, 1);
+      const max = doc.scrollHeight - window.innerHeight;
+      const progress = max > 2 ? window.scrollY / max : virtual;
+      v.target = clamp(progress, 0, 1);
       if (first) {
         v.p = v.target;
         first = false;
@@ -225,6 +269,12 @@ export default function App() {
       if (endRef.current) {
         endRef.current.style.opacity = ramp(v.p, 0.991, 0.999).toFixed(3);
       }
+      } catch (err) {
+        if (!frameErrored) {
+          frameErrored = true;
+          console.error("[hidamari] frame error — the film continues", err);
+        }
+      }
     };
     raf = requestAnimationFrame(loop);
 
@@ -232,6 +282,11 @@ export default function App() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
       window.removeEventListener("pointermove", onPointer);
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("keydown", onKey);
       mq.removeEventListener?.("change", onMq);
       audio.disable();
     };
